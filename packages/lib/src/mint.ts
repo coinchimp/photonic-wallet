@@ -1,4 +1,4 @@
-import { encodeAtom, isImmutableToken } from "./atom";
+import { encodeRst, isImmutableToken } from "./token";
 import {
   commitScriptSize,
   dMintDiffToTarget,
@@ -24,8 +24,8 @@ import {
   txSize,
 } from "./script";
 import {
-  AtomPayload,
-  CommitOperation,
+  SmartTokenPayload,
+  TokenContractType,
   TokenCommitData,
   RevealDirectParams,
   RevealPsbtParams,
@@ -50,9 +50,9 @@ export function commitBundle(
   wif: string,
   utxos: Utxo[],
   tokens: {
-    operation: CommitOperation;
+    contract: TokenContractType;
     outputValue: number;
-    payload: AtomPayload;
+    payload: SmartTokenPayload;
   }[],
   delegate:
     | {
@@ -80,7 +80,7 @@ export function commitBundle(
           );
           const extraRefRequired =
             isImmutableToken(token.payload) || deployMethod === "dmint";
-          return [commitScriptSize(token.operation, hasDelegate)].concat(
+          return [commitScriptSize(token.contract, hasDelegate)].concat(
             extraRefRequired ? [] : [p2pkhScriptSize]
           );
         })
@@ -88,11 +88,16 @@ export function commitBundle(
   }));
 
   const {
+    funded,
     funding: inputs,
     change,
     remaining,
     fee,
   } = fundTx(address, utxos, [], target, p2pkh, defaultFeeRate);
+
+  if (!funded) {
+    throw new Error("Couldn't fund transaction");
+  }
 
   // TODO should delegate token creation be merged with funding UTXOs?
 
@@ -125,10 +130,10 @@ export function commitBundle(
 
 // Deploy method must be know in advance so sequential dmint refs for minting and token contracts can be prepared
 export function createCommitOutputs(
-  operation: CommitOperation,
+  contract: TokenContractType,
   deployMethod: DeployMethod,
   address: string,
-  payload: AtomPayload,
+  payload: SmartTokenPayload,
   delegate?: {
     ref: string;
     utxo: Utxo;
@@ -136,22 +141,22 @@ export function createCommitOutputs(
 ) {
   const p2pkh = p2pkhScript(address);
   const immutable = isImmutableToken(payload);
-  const atom = encodeAtom(operation, payload);
+  const rst = encodeRst(contract, payload);
   const scriptFn = {
     nft: nftCommitScript,
     ft: ftCommitScript,
     dat: datCommitScript,
-  }[operation];
-  const script = scriptFn(address, atom.payloadHash, delegate?.ref);
+  }[contract];
+  const script = scriptFn(address, rst.payloadHash, delegate?.ref);
   const outputs: UnfinalizedOutput[] = [];
 
   outputs.push({ script, value: 1 });
-  if (operation === "nft" && !immutable) {
+  if (contract === "nft" && !immutable) {
     // Prepare a ref for the mutable contract. This will be token ref + 1.
     outputs.push({ script: p2pkh, value: 1 });
   }
 
-  if (operation === "ft" && deployMethod === "dmint") {
+  if (contract === "ft" && deployMethod === "dmint") {
     // Two outputs are required for contract ref and token ref
     outputs.push({ script: p2pkh, value: 1 });
   }
@@ -162,7 +167,7 @@ export function createCommitOutputs(
       value: 1,
     },
     immutable,
-    atom,
+    rst,
     outputs,
   };
 }
@@ -172,9 +177,9 @@ export function commitBatch(
   address: string,
   wif: string,
   ops: {
-    operation: CommitOperation;
+    contract: TokenContractType;
     outputValue: number;
-    payload: AtomPayload;
+    payload: SmartTokenPayload;
   }[],
   funding: Utxo,
   delegate?: {
@@ -184,9 +189,9 @@ export function commitBatch(
 ) {
   const outputs: UnfinalizedOutput[] = [];
   let vout = 0;
-  const reveals = ops.map(({ operation, outputValue, payload }) => {
+  const reveals = ops.map(({ contract, outputValue, payload }) => {
     const { outputs: commitOutputs, ...rest } = createCommitOutputs(
-      operation,
+      contract,
       deployMethod,
       address,
       payload,
@@ -246,7 +251,7 @@ export function revealDirect(
       txSize(
         batch
           .flatMap((t) =>
-            [revealScriptSigSize(t.atom.script.length / 2)].concat(
+            [revealScriptSigSize(t.rst.scriptSig.length / 2)].concat(
               t.immutable ? [] : [p2pkhScriptSigSize]
             )
           )
@@ -255,10 +260,10 @@ export function revealDirect(
         batch
           .flatMap((t) =>
             ([] as number[])
-              .concat(t.atom.operation === "nft" ? [nftScriptSize] : [])
-              .concat(t.atom.operation === "ft" ? [ftScriptSize] : [])
+              .concat(t.rst.contract === "nft" ? [nftScriptSize] : [])
+              .concat(t.rst.contract === "ft" ? [ftScriptSize] : [])
               .concat(
-                t.atom.operation === "nft" && !t.immutable
+                t.rst.contract === "nft" && !t.immutable
                   ? [mutableNftScriptSize]
                   : []
               )
@@ -270,8 +275,8 @@ export function revealDirect(
       batch.reduce(
         (a, t) =>
           a +
-          (["nft", "ft"].includes(t.atom.operation) ? t.outputValue : 0) +
-          (t.atom.operation === "nft" && !t.immutable ? 1 : 0), // 1 photon mutable output
+          (["nft", "ft"].includes(t.rst.contract) ? t.outputValue : 0) +
+          (t.rst.contract === "nft" && !t.immutable ? 1 : 0), // 1 photon mutable output
         0
       ),
   }));
@@ -313,11 +318,11 @@ export function revealDirect(
 // Not used for PSBT deployments
 export function createRevealOutputs(
   creatorAddress: string,
-  { atom, outputValue, immutable, utxo }: TokenCommitData,
+  { rst, outputValue, immutable, utxo }: TokenCommitData,
   deployMethod: DeployMethod,
   deployParams: RevealDirectParams | RevealDmintParams
 ) {
-  if (deployMethod === "dmint" && atom.operation !== "ft") {
+  if (deployMethod === "dmint" && rst.contract !== "ft") {
     throw new Error("Operation does not support dmint deployments");
   }
 
@@ -326,7 +331,7 @@ export function createRevealOutputs(
   const inputs: UnfinalizedInput[] = [];
   const outputs: UnfinalizedOutput[] = [];
 
-  if (atom.operation === "nft") {
+  if (rst.contract === "nft") {
     outputs.push({
       script: nftScript(deployParams.address, tokenRef),
       value: outputValue,
@@ -335,7 +340,7 @@ export function createRevealOutputs(
       address: deployParams.address,
       tokenRef,
     });
-  } else if (atom.operation === "ft") {
+  } else if (rst.contract === "ft") {
     if (deployMethod === "direct") {
       outputs.push({
         script: ftScript(deployParams.address, tokenRef),
@@ -375,10 +380,10 @@ export function createRevealOutputs(
     ...utxo,
     // Add script sig size in case it's needed for fee calculation
     // Batch reveals will already handle this with txSize but single mints require it
-    scriptSigSize: revealScriptSigSize(atom.script.length / 2),
+    scriptSigSize: revealScriptSigSize(rst.scriptSig.length / 2),
   });
 
-  if (atom.operation === "ft" && deployMethod === "dmint") {
+  if (rst.contract === "ft" && deployMethod === "dmint") {
     // Add input for creating the dmint contract ref
     inputs.push({
       txid: utxo.txid,
@@ -388,7 +393,7 @@ export function createRevealOutputs(
     });
   }
 
-  if (atom.operation === "nft" && !immutable) {
+  if (rst.contract === "nft" && !immutable) {
     const mutableRef = Outpoint.fromUTXO(utxo.txid, utxo.vout + 1)
       .reverse()
       .ref();
@@ -399,7 +404,7 @@ export function createRevealOutputs(
       script: p2pkh,
     });
     outputs.push({
-      script: mutableNftScript(mutableRef, atom.payloadHash),
+      script: mutableNftScript(mutableRef, rst.payloadHash),
       value: 1,
     });
     console.debug("Added mutable contract output", {
@@ -431,8 +436,8 @@ export function revealBatch(
   }
   const refs: string[] = [];
   tokens.forEach((token) => {
-    const { atom, utxo } = token;
-    tokenScriptSigs[inputs.length] = atom.script;
+    const { rst, utxo } = token;
+    tokenScriptSigs[inputs.length] = rst.scriptSig;
     const outpoint = Outpoint.fromObject(utxo);
     const params = revealParams[outpoint.toString()] as RevealDirectParams;
     const revealTxos = createRevealOutputs(
@@ -553,7 +558,7 @@ export function revealPsbt(
 
   // Iterate revealParams object so transactions can be selectively created
   Object.entries(revealParams).forEach(([k, { photons, address }]) => {
-    const { atom, utxo, immutable } = outpointTokenMap[k];
+    const { rst, utxo, immutable } = outpointTokenMap[k];
     const txObj: { reveal: string; mutable?: string } = {
       reveal: buildTx(
         address,
@@ -562,7 +567,7 @@ export function revealPsbt(
         [{ script: p2pkhScript(address), value: photons }],
         false,
         (_, script) => {
-          script.add(Script.fromString(atom.script));
+          script.add(Script.fromString(rst.script));
         },
         crypto.Signature.SIGHASH_SINGLE | crypto.Signature.SIGHASH_ANYONECANPAY
       ).toString(),
@@ -585,7 +590,7 @@ export function revealPsbt(
         ],
         [
           {
-            script: mutableNftScript(mutableRef, atom.payloadHash),
+            script: mutableNftScript(mutableRef, rst.payloadHash),
             value: 1,
           },
         ],
@@ -602,31 +607,31 @@ export function revealPsbt(
 
 // Mint a single token
 export function mintToken(
-  operation: CommitOperation,
-  deployMethod: "direct" | "dmint",
-  deployParams: RevealDirectParams | RevealDmintParams, // PSBT not supported for single mints
-  outputValue: number,
+  contract: TokenContractType,
+  deploy: // PSBT not supported for single mints
+  | { method: "direct"; params: RevealDirectParams; value: number }
+    | { method: "dmint"; params: RevealDmintParams; value: number },
   wif: string,
   utxos: Utxo[],
-  payload: AtomPayload,
+  payload: SmartTokenPayload,
   relUtxos: Utxo[],
   feeRate: number
 ) {
-  if (deployMethod === "dmint" && operation !== "ft") {
-    throw new Error("Operation does not support dmint deployments");
+  if (deploy.method === "dmint" && contract !== "ft") {
+    throw new Error("Token contract does not support dmint deployments");
   }
 
   let unspentRxd = utxos;
   const fees: number[] = [];
   const { outputs, ...partialCommitData } = createCommitOutputs(
-    operation,
-    deployMethod,
-    deployParams.address,
+    contract,
+    deploy.method,
+    deploy.params.address,
     payload
   );
-  const p2pkh = p2pkhScript(deployParams.address);
+  const p2pkh = p2pkhScript(deploy.params.address);
   const commitFund = fundTx(
-    deployParams.address,
+    deploy.params.address,
     unspentRxd,
     [],
     outputs,
@@ -636,7 +641,7 @@ export function mintToken(
   fees.push(commitFund.fee);
   const commitOutputs = [...outputs, ...commitFund.change];
   const commitTx = buildTx(
-    deployParams.address,
+    deploy.params.address,
     wif,
     commitFund.funding,
     commitOutputs,
@@ -652,14 +657,14 @@ export function mintToken(
       vout: 0,
       ...partialCommitData.utxo,
     },
-    outputValue,
+    outputValue: deploy.value,
   };
 
   const revealTarget = createRevealOutputs(
-    deployParams.address,
+    deploy.params.address,
     commitData,
-    deployMethod,
-    deployParams
+    deploy.method,
+    deploy.params
   );
 
   // Since this is just a single token, related tokens will be referenced directly in the transaction instead of a delegate
@@ -673,7 +678,7 @@ export function mintToken(
   ];
 
   const revealFund = fundTx(
-    deployParams.address,
+    deploy.params.address,
     unspentRxd,
     revealInputs,
     revealOutputs,
@@ -690,14 +695,14 @@ export function mintToken(
   );
 
   const revealTx = buildTx(
-    deployParams.address,
+    deploy.params.address,
     wif,
     revealInputs,
     revealOutputs,
     false,
     (index, script) => {
       if (index === 0) {
-        script.add(Script.fromString(commitData.atom.script));
+        script.add(Script.fromString(commitData.rst.scriptSig));
       }
     }
   );

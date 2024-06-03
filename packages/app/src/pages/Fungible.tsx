@@ -2,7 +2,7 @@ import { useParams } from "react-router-dom";
 import { t } from "@lingui/macro";
 import { Box } from "@chakra-ui/react";
 import PageHeader from "@app/components/PageHeader";
-import { Atom, AtomType } from "@app/types";
+import { SmartToken, SmartTokenType } from "@app/types";
 import { useLiveQuery } from "dexie-react-hooks";
 import db from "@app/db";
 import TokenRow from "@app/components/TokenRow";
@@ -24,57 +24,58 @@ export default function Fungible() {
 }
 
 function TokenGrid() {
-  const [atoms, balances] = useLiveQuery(
+  const [tokens, balances] = useLiveQuery(
     async () => {
-      // Get all FT atoms
-      const atoms = await db.atom.where({ atomType: AtomType.FT }).toArray();
+      // Get all FTs
+      const tokens = await db.rst
+        .where({ tokenType: SmartTokenType.FT })
+        .toArray();
 
       // Get FT balances by ref
-      const refs = atoms.map(({ ref }) => ref);
+      const refs = tokens.map(({ ref }) => ref);
       const balances = Object.fromEntries(
         (await db.balance.where("id").anyOf(refs).toArray()).map((b) => [
           b.id,
           b,
         ])
       );
-      return [atoms, balances];
+      return [tokens, balances];
     },
     [],
     [null, null]
   );
 
-  const hasBalance = (atom: Atom) =>
-    atom &&
+  const hasBalance = (rst: SmartToken) =>
+    rst &&
     balances &&
-    (balances[atom.ref]?.confirmed || 0 + balances[atom.ref]?.unconfirmed || 0);
+    (balances[rst.ref]?.confirmed || 0 + balances[rst.ref]?.unconfirmed || 0);
 
-  if (!atoms) {
+  if (!tokens) {
     return null;
   }
+
+  const withBalance = tokens.filter((t) => hasBalance(t));
 
   return (
     <>
       <PageHeader toolbar={<MintMenu />}>{t`Fungible Tokens`}</PageHeader>
       <Box px={4} overflowY="auto">
-        {atoms.length === 0 ? (
+        {withBalance.length === 0 ? (
           <NoContent>{t`No assets`}</NoContent>
         ) : (
-          atoms.map(
-            (token) =>
-              hasBalance(token) && (
-                <TokenRow
-                  atom={token}
-                  value={
-                    (balances[token.ref]?.confirmed || 0) +
-                    (balances[token.ref]?.unconfirmed || 0)
-                  }
-                  key={token.ref}
-                  to={`/fungible/atom/${token.ref}`}
-                  size="sm"
-                  defaultIcon={RiQuestionFill}
-                />
-              )
-          )
+          tokens.map((token) => (
+            <TokenRow
+              rst={token}
+              value={
+                (balances[token.ref]?.confirmed || 0) +
+                (balances[token.ref]?.unconfirmed || 0)
+              }
+              key={token.ref}
+              to={`/fungible/token/${token.ref}`}
+              size="sm"
+              defaultIcon={RiQuestionFill}
+            />
+          ))
         )}
       </Box>
     </>

@@ -26,7 +26,7 @@ import ContentContainer from "@app/components/ContentContainer";
 import TokenContent from "@app/components/TokenContent";
 import PageHeader from "@app/components/PageHeader";
 import TxSuccessModal from "./TxSuccessModal";
-import { Atom } from "../types";
+import { SmartToken } from "../types";
 import { openModal, wallet } from "@app/signals";
 import {
   RiContractRightLine,
@@ -101,17 +101,17 @@ export default function ViewFungible({
   const successDisclosure = useDisclosure();
   const [token, author, container] = useLiveQuery(
     async () => {
-      const token = await db.atom.get({ ref: sref });
-      const a = token?.author && (await db.atom.get({ ref: token.author }));
+      const token = await db.rst.get({ ref: sref });
+      const a = token?.author && (await db.rst.get({ ref: token.author }));
       const c =
-        token?.container && (await db.atom.get({ ref: token.container }));
-      return [token, a, c] as [Atom?, Atom?, Atom?];
+        token?.container && (await db.rst.get({ ref: token.container }));
+      return [token, a, c] as [SmartToken?, SmartToken?, SmartToken?];
     },
     [sref],
     []
   );
   const txid = useRef("");
-  const { onCopy: onLinkCopy } = useClipboard(token?.fileSrc || "");
+  const { onCopy: onLinkCopy } = useClipboard(token?.remote?.u || "");
 
   // TODO show loading or 404
   if (!token) {
@@ -142,16 +142,16 @@ export default function ViewFungible({
     successDisclosure.onOpen();
   };
 
-  const isIPFS = token.fileSrc?.startsWith("ipfs://");
+  const isIPFS = token.remote?.u?.startsWith("ipfs://");
   const isKnownEmbed = [
-    ".txt",
-    ".jpg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".svg",
-    ".avif",
-  ].includes(token.filename?.substring(token.filename?.lastIndexOf(".")) || "");
+    "text/plain",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/avif",
+    "image/svg+xml",
+  ].includes(token.embed?.t || "");
 
   return (
     <>
@@ -205,7 +205,7 @@ export default function ViewFungible({
                   {token && (
                     <Box w="64px" h="64px">
                       <TokenContent
-                        atom={token}
+                        rst={token}
                         defaultIcon={RiQuestionFill}
                         thumbnail
                       />
@@ -214,7 +214,7 @@ export default function ViewFungible({
                   <Box ml={4} flexGrow={1}>
                     <Heading size="md">{token.name}</Heading>
                     <Heading size="md" fontWeight="normal" color="gray.400">
-                      {(token.args.ticker as string) || <i>No ticker</i>}
+                      {(token.ticker as string) || <i>No ticker</i>}
                     </Heading>
                   </Box>
                   <ValueTag>
@@ -222,15 +222,15 @@ export default function ViewFungible({
                   </ValueTag>
                 </Flex>
               </GridItem>
-              {token.file && !isKnownEmbed && (
+              {token.embed && !isKnownEmbed && (
                 <Warning>{t`Files may be unsafe and result in loss of funds`}</Warning>
               )}
-              {!token.file && token.fileSrc && !isIPFS && (
+              {!token.embed && token.remote && !isIPFS && (
                 <Warning>
                   {t`URLs may be unsafe and result in loss of funds`}
                 </Warning>
               )}
-              {!token.file && token.fileSrc && (
+              {!token.embed && token.remote && (
                 <>
                   <GridItem
                     as={Button}
@@ -256,12 +256,12 @@ export default function ViewFungible({
                 {t`Melt`}
               </Button>
             </SimpleGrid>
-            <TokenDetails atom={token} container={container} author={author} />
+            <TokenDetails rst={token} container={container} author={author} />
           </Grid>
         </Container>
       </Grid>
       <SendFungible
-        atom={token}
+        rst={token}
         disclosure={sendDisclosure}
         onSuccess={(txid) => {
           sendDisclosure.onClose();
@@ -269,7 +269,7 @@ export default function ViewFungible({
         }}
       />
       <MeltFungible
-        atom={token}
+        rst={token}
         disclosure={meltDisclosure}
         onSuccess={(txid: string) => {
           meltDisclosure.onClose();

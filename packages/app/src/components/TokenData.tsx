@@ -3,22 +3,21 @@ import { Transaction } from "@radiantblockchain/radiantjs";
 import opfs from "@app/opfs";
 import Outpoint from "@lib/Outpoint";
 import { Box, SimpleGrid } from "@chakra-ui/react";
-import { DecodedAtom, decodeAtom } from "@lib/atom";
+import { DecodedRst, decodeRst } from "@lib/token";
 import { jsonHex } from "@lib/util";
 import DownloadLink from "./DownloadLink";
 import { PropertyCard } from "./ViewDigitalObject";
-import AtomIcon from "./AtomIcon";
 import { t } from "@lingui/macro";
-import { Atom } from "@app/types";
+import { SmartToken } from "@app/types";
 import { DownloadIcon } from "@chakra-ui/icons";
 import ActionIcon from "./ActionIcon";
+import mime from "mime";
 
-export default function AtomData({ atom }: { atom: Atom }) {
-  const reveal =
-    atom.revealOutpoint && Outpoint.fromString(atom.revealOutpoint);
+export default function TokenData({ rst }: { rst: SmartToken }) {
+  const reveal = rst.revealOutpoint && Outpoint.fromString(rst.revealOutpoint);
   const [{ tx, decoded }, setData] = useState<{
     tx?: string;
-    decoded?: DecodedAtom;
+    decoded?: DecodedRst;
   }>({
     tx: undefined,
     decoded: undefined,
@@ -33,7 +32,7 @@ export default function AtomData({ atom }: { atom: Atom }) {
         const script = tx
           ? new Transaction(tx).inputs[reveal.getVout()].script
           : undefined;
-        const decoded = (script && decodeAtom(script)) || undefined;
+        const decoded = (script && decodeRst(script)) || undefined;
 
         setData({ tx, decoded });
       }
@@ -44,22 +43,7 @@ export default function AtomData({ atom }: { atom: Atom }) {
     <Box mx={4}>{t`Data not found`}</Box>
   ) : (
     <>
-      <PropertyCard
-        heading={
-          <>
-            <AtomIcon
-              mr={2}
-              color="white"
-              bgColor="blackAlpha.400"
-              p={1}
-              fontSize="2xl"
-              borderRadius={2}
-            />
-            <span>Atomical Payload</span>
-          </>
-        }
-        mb={4}
-      >
+      <PropertyCard heading="Token Data" mb={4}>
         <Box
           as="pre"
           gridArea="child"
@@ -68,7 +52,14 @@ export default function AtomData({ atom }: { atom: Atom }) {
           wordBreak="break-all"
           bg="blackAlpha.300"
         >
-          {jsonHex({ ...decoded.payload, ...decoded.files }, 36)}
+          {jsonHex(
+            {
+              ...decoded.payload,
+              ...decoded.embeddedFiles,
+              ...decoded.remoteFiles,
+            },
+            36
+          )}
         </Box>
       </PropertyCard>
       <SimpleGrid columns={{ base: 1, lg: 2 }} gap={2}>
@@ -82,12 +73,12 @@ export default function AtomData({ atom }: { atom: Atom }) {
             {t`Download transaction`}
           </DownloadLink>
         )}
-        {atom.file && (
+        {rst.embed && (
           <DownloadLink
             leftIcon={<ActionIcon as={DownloadIcon} />}
             mimeType="application/octet-stream"
-            data={atom.file}
-            filename={atom.filename || "file"}
+            data={rst.embed.b}
+            filename={`main.${mime.getExtension(rst.embed.t) || "dat"}`}
           >
             {t`Download main file`}
           </DownloadLink>

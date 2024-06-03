@@ -14,8 +14,8 @@ export enum ContractType {
   FT,
 }
 
-// Type of Atom object (mint operation)
-export enum AtomType {
+// Type of radiant smart token (mint operation)
+export enum SmartTokenType {
   NFT,
   FT,
   DAT,
@@ -58,27 +58,31 @@ export interface BlockHeader {
   reorg: boolean;
 }
 
-export interface Atom {
+// Tokens that follow Radiant Smart Token standard
+export interface SmartToken {
   id?: number;
-  atomType: AtomType;
+  p?: (number | string)[];
+  tokenType: SmartTokenType;
   ref: string;
+  ticker?: string;
   lastTxoId?: number;
   revealOutpoint?: string;
   spent: 0 | 1;
   fresh: 0 | 1;
   name: string;
-  type: string;
+  type: string; // User defined type
   immutable?: boolean;
   description: string;
   author: string;
   container: string;
   attrs: { [key: string]: string };
-  args: { [key: string]: unknown };
-  filename?: string;
-  fileSrc?: string;
-  file?: ArrayBuffer; // TODO save multiple files? Should this go in OPFS or reference the OPFS raw tx?
-  hash?: ArrayBuffer;
-  hashstamp?: ArrayBuffer;
+  embed?: { t: string; b: ArrayBuffer }; // Embedded file. TODO save multiple files? Should this go in OPFS or reference the OPFS raw tx?
+  remote?: {
+    t: string;
+    u: string;
+    h?: ArrayBuffer;
+    hs?: ArrayBuffer;
+  }; // Remote file
   height?: number;
 }
 

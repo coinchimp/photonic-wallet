@@ -1,7 +1,6 @@
 import { Box, Icon, Image } from "@chakra-ui/react";
-import mime from "mime";
 import { QRCodeSVG } from "qrcode.react";
-import { Atom } from "@app/types";
+import { SmartToken } from "@app/types";
 import { TbLink } from "react-icons/tb";
 import {
   BsFileEarmarkFill,
@@ -30,22 +29,21 @@ const ContentMessage = ({ message = "No content" }: { message?: string }) => (
 );
 
 export default function TokenContent({
-  atom,
+  rst,
   thumbnail = false,
   defaultIcon = BsFillFileXFill,
 }: {
-  atom?: Atom;
+  rst?: SmartToken;
   thumbnail?: boolean;
   defaultIcon?: ((props: IconBaseProps) => JSX.Element) | IconType;
 }) {
-  const { fileSrc, file, filename } = atom || {};
+  const { embed, remote } = rst || {};
   const maxLen = 1000;
-  const type = filename && mime.getType(filename);
-  const isImage = type?.startsWith("image/");
 
-  if (isImage && fileSrc) {
-    const isIpfs = fileSrc?.match(/^ipfs:\/\//);
-    const url = isIpfs ? useIpfsUrl(fileSrc) : fileSrc;
+  // Image URL
+  if (remote && remote.t?.startsWith("image/")) {
+    const isIpfs = remote.u?.match(/^ipfs:\/\//);
+    const url = isIpfs ? useIpfsUrl(remote.u) : remote.u;
     if (isIpfs) {
       return (
         <Image
@@ -74,7 +72,7 @@ export default function TokenContent({
   }
 
   // Non-image URL
-  if (fileSrc) {
+  if (remote) {
     if (thumbnail) {
       return <Icon as={TbLink} width="100%" height="100%" color="gray.500" />;
     }
@@ -82,23 +80,22 @@ export default function TokenContent({
       <>
         {thumbnail || (
           <Box borderRadius="md" overflow="hidden" mb={4}>
-            <QRCodeSVG size={256} value={fileSrc as string} includeMargin />
+            <QRCodeSVG size={256} value={remote.u} includeMargin />
           </Box>
         )}
         <div>
-          <Identifier copyValue={fileSrc} showCopy>
-            {(fileSrc as string).substring(0, 200)}
-            {(fileSrc as string).length > 200 && "..."}
+          <Identifier copyValue={remote.u} showCopy>
+            {remote.u.substring(0, 200)}
+            {remote.u.length > 200 && "..."}
           </Identifier>
         </div>
       </>
     );
   }
 
-  if (filename && file) {
+  if (embed) {
     // Text file
-    if (type?.startsWith("text/plain")) {
-      const text = new TextDecoder("utf-8").decode(file);
+    if (embed.t?.startsWith("text/plain")) {
       if (thumbnail) {
         return (
           <Icon
@@ -110,6 +107,7 @@ export default function TokenContent({
         );
       }
 
+      const text = new TextDecoder("utf-8").decode(embed.b);
       return (
         <Box as="pre" whiteSpace="pre-wrap">
           {text.substring(0, maxLen)}
@@ -119,11 +117,11 @@ export default function TokenContent({
     }
 
     // Image file
-    if (file && type?.startsWith("image/")) {
+    if (embed.t?.startsWith("image/")) {
       return (
         <Image
-          src={`data:${type};base64, ${btoa(
-            String.fromCharCode(...new Uint8Array(file))
+          src={`data:${embed.t};base64, ${btoa(
+            String.fromCharCode(...new Uint8Array(embed.b))
           )}`}
           width="100%"
           height="100%"
@@ -155,7 +153,7 @@ export default function TokenContent({
           color="gray.500"
           mb={2}
         />
-        <ContentMessage message={filename} />
+        <ContentMessage />
       </>
     );
   }

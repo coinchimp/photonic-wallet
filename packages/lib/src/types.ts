@@ -33,13 +33,8 @@ export type TokenRevealParams =
   | RevealDmintParams
   | RevealPsbtParams;
 
-export type AtomPayload = {
-  args: {
-    [key: string]: unknown;
-  };
-  ctx: {
-    [key: string]: unknown;
-  };
+export type SmartTokenPayload = {
+  p: (string | number)[];
   in?: Uint8Array[];
   by?: Uint8Array[];
   attrs: {
@@ -48,15 +43,21 @@ export type AtomPayload = {
   [key: string]: unknown;
 };
 
-export type AtomRemoteFile = {
-  src: string;
+export type SmartTokenEmbeddedFile = {
+  t: string;
+  b: Uint8Array;
+};
+
+export type SmartTokenRemoteFile = {
+  t: string;
+  u: string;
   h?: Uint8Array;
   hs?: Uint8Array;
 };
 
-export type AtomFile = Uint8Array | AtomRemoteFile;
+export type SmartTokenFile = SmartTokenEmbeddedFile | SmartTokenRemoteFile;
 
-export type CommitOperation = "nft" | "dat" | "ft";
+export type TokenContractType = "nft" | "dat" | "ft";
 
 // Unsigned inputs are used for fee calcualtion and do not yet have a script sig
 // Maybe there is a better name for this...
@@ -122,7 +123,7 @@ export type TokenCommitData = {
   };
   immutable: boolean;
   outputValue: number;
-  atom: { operation: string; script: string; payloadHash: string };
+  rst: { contract: TokenContractType; scriptSig: string; payloadHash: string };
 };
 
 export default {};

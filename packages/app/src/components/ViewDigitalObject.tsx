@@ -29,11 +29,11 @@ import Photons from "@app/components/Photons";
 import ContentContainer from "@app/components/ContentContainer";
 import DownloadLink from "@app/components/DownloadLink";
 import TokenContent from "@app/components/TokenContent";
-import AtomTokenType from "@app/components/AtomTokenType";
+import TokenType from "@app/components/TokenType";
 import PageHeader from "@app/components/PageHeader";
 import MeltDigitalObject from "./MeltDigitalObject";
 import TxSuccessModal from "./TxSuccessModal";
-import { Atom, TxO } from "../types";
+import { SmartToken, TxO } from "../types";
 import { openModal, wallet } from "@app/signals";
 import TokenDetails from "./TokenDetails";
 import createExplorerUrl from "@app/network/createExplorerUrl";
@@ -42,6 +42,9 @@ import { useViewPanelContext } from "@app/layouts/ViewPanelLayout";
 import ActionIcon from "./ActionIcon";
 import { MdDeleteForever } from "react-icons/md";
 import { TbArrowUpRight } from "react-icons/tb";
+import mime from "mime";
+// import FetchTokenTest from "./FetchMutableTest";
+// import EditTokenTest from "./EditTokenTest";
 
 export const PropertyCard = ({
   heading,
@@ -101,18 +104,18 @@ export default function ViewDigitalObject({
   const successDisclosure = useDisclosure();
   const [nft, txo, author, container] = useLiveQuery(
     async () => {
-      const nft = await db.atom.get({ ref: sref });
+      const nft = await db.rst.get({ ref: sref });
       if (!nft?.lastTxoId) return [undefined, undefined];
       const txo = await db.txo.get(nft.lastTxoId);
-      const a = nft?.author && (await db.atom.get({ ref: nft.author }));
-      const c = nft?.container && (await db.atom.get({ ref: nft.container }));
-      return [nft, txo, a, c] as [Atom, TxO, Atom?, Atom?];
+      const a = nft?.author && (await db.rst.get({ ref: nft.author }));
+      const c = nft?.container && (await db.rst.get({ ref: nft.container }));
+      return [nft, txo, a, c] as [SmartToken, TxO, SmartToken?, SmartToken?];
     },
     [sref],
     []
   );
   const txid = useRef("");
-  const { onCopy: onLinkCopy } = useClipboard(nft?.fileSrc || "");
+  const { onCopy: onLinkCopy } = useClipboard(nft?.remote?.u || "");
 
   // TODO show loading or 404
   if (!txo || !nft) {
@@ -143,16 +146,16 @@ export default function ViewDigitalObject({
     successDisclosure.onOpen();
   };
 
-  const isIPFS = nft.fileSrc?.startsWith("ipfs://");
+  const isIPFS = nft.remote?.u?.startsWith("ipfs://");
   const isKnownEmbed = [
-    ".txt",
-    ".jpg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".svg",
-    ".avif",
-  ].includes(nft.filename?.substring(nft.filename?.lastIndexOf(".")) || "");
+    "text/plain",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "image/avif",
+    "image/svg+xml",
+  ].includes(nft.embed?.t || "");
   const location = Outpoint.fromUTXO(txo.txid, txo.vout);
 
   return (
@@ -204,28 +207,28 @@ export default function ViewDigitalObject({
                   },
                 }}
               >
-                <TokenContent atom={nft} />
+                <TokenContent rst={nft} />
               </GridItem>
-              {nft.file && !isKnownEmbed && (
+              {nft.embed && !isKnownEmbed && (
                 <Warning>{t`Files may be unsafe and result in loss of funds`}</Warning>
               )}
-              {!nft.file && nft.fileSrc && !isIPFS && (
+              {!nft.embed && nft.remote && !isIPFS && (
                 <Warning>
                   {t`URLs may be unsafe and result in loss of funds`}
                 </Warning>
               )}
-              {nft.file && (
+              {nft.embed && (
                 <GridItem
                   as={DownloadLink}
-                  data={nft.file}
-                  filename={nft.filename}
+                  data={nft.embed.b}
+                  filename={`main.${mime.getExtension(nft.embed.t) || "dat"}`}
                   leftIcon={<ActionIcon as={DownloadIcon} />}
                   colSpan={2}
                 >
                   {t`Download`}
                 </GridItem>
               )}
-              {!nft.file && nft.fileSrc && (
+              {!nft.embed && nft.remote && (
                 <>
                   <GridItem
                     as={Button}
@@ -243,8 +246,7 @@ export default function ViewDigitalObject({
                   <EditTokenTest token={nft} txo={txo} />
                   <FetchTokenTest token={nft} />
                 </>
-              )}
-              */}
+              )} */}
               <Button
                 leftIcon={<ActionIcon as={TbArrowUpRight} />}
                 onClick={() => unlock(openSend)}
@@ -260,13 +262,13 @@ export default function ViewDigitalObject({
               </Button>
             </SimpleGrid>
             {nft && (
-              <TokenDetails atom={nft} container={container} author={author}>
+              <TokenDetails rst={nft} container={container} author={author}>
                 <PropertyCard heading={t`Output value`}>
                   <Photons value={txo.value} />
                 </PropertyCard>
                 {nft.type && (
                   <PropertyCard heading={t`Type`}>
-                    <AtomTokenType type={nft.type} />
+                    <TokenType type={nft.type} />
                   </PropertyCard>
                 )}
                 <PropertyCard heading={t`Location`}>

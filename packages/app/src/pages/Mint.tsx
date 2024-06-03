@@ -1,7 +1,8 @@
 import React, { useCallback, useReducer, useRef, useState } from "react";
 import mime from "mime";
 import { t, Trans } from "@lingui/macro";
-//import { Link } from "react-router-dom";
+import { Link } from "react-router-dom";
+import { RST_DMINT, RST_FT, RST_MUT, RST_NFT } from "@lib/protocols";
 import {
   Alert,
   AlertIcon,
@@ -44,13 +45,13 @@ import db from "@app/db";
 import { ContractType, ElectrumStatus } from "@app/types";
 import Outpoint from "@lib/Outpoint";
 import { mintToken } from "@lib/mint";
-//import { encodeCid, upload } from "@lib/ipfs";
+import { encodeCid, upload } from "@lib/ipfs";
 import { photonsToRXD } from "@lib/format";
-import AtomTokenType from "@app/components/AtomTokenType";
+import TokenType from "@app/components/TokenType";
 import ContentContainer from "@app/components/ContentContainer";
 import PageHeader from "@app/components/PageHeader";
-//import HashStamp from "@app/components/HashStamp";
-//import Identifier from "@app/components/Identifier";
+import HashStamp from "@app/components/HashStamp";
+import Identifier from "@app/components/Identifier";
 import FormSection from "@app/components/FormSection";
 import MintSuccessModal from "@app/components/MintSuccessModal";
 import {
@@ -60,12 +61,19 @@ import {
   openModal,
   wallet,
 } from "@app/signals";
-import { AtomFile, AtomPayload, Utxo } from "@lib/types";
+import {
+  RevealDirectParams,
+  RevealDmintParams,
+  SmartTokenFile,
+  SmartTokenPayload,
+  SmartTokenRemoteFile,
+  Utxo,
+} from "@lib/types";
 import { electrumWorker } from "@app/electrum/Electrum";
+import { PromiseExtended } from "dexie";
 
-// IPFS uploading is currently disabled until an alternative to nft.storage can be found
-
-const MAX_BYTES = 100000;
+const MAX_BYTES = 100_000;
+const MAX_IPFS_BYTES = 5_000_000;
 
 type ContentMode = "file" | "text" | "url";
 
@@ -162,23 +170,26 @@ const encodeContent = (
   text?: string,
   url?: string,
   urlFileType?: string
-): [string, AtomFile | undefined] => {
+): [string, SmartTokenFile | undefined] => {
+  const urlContentType =
+    (urlFileType && mime.getType(urlFileType)) || "text/html";
   if (mode === "url") {
-    return [`main.${urlFileType}`, { src: url as string }];
+    return [`main`, { t: urlContentType, u: url as string }];
   }
 
   if (mode === "text") {
-    return ["main.txt", new TextEncoder().encode(text)];
+    return ["main", { t: "text/plain", b: new TextEncoder().encode(text) }];
   }
 
   if (fileState.file) {
-    const filename = `main.${mime.getExtension(fileState.file?.type)}`;
+    if (fileState.ipfs) {
+      return ["main", { t: urlContentType, u: `ipfs://${fileState.cid}` }];
+    }
 
-    /*if (fileState.ipfs) {
-      return [filename, { src: `ipfs://${fileState.cid}` }];
-    }*/
-
-    return [filename, new Uint8Array(fileState.file.data)];
+    return [
+      "main",
+      { t: fileState.file?.type || "", b: new Uint8Array(fileState.file.data) },
+    ];
   }
 
   return ["", undefined];
@@ -230,13 +241,13 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
   const [attrs, setAttrs] = reset(useState<[string, string][]>([]));
   const [mode, setMode] = reset(useState<ContentMode>("file"));
   const [fileState, setFileState] = reset(useState<FileState>({ ...noFile }));
-  //const [enableHashstamp, setEnableHashstamp] = reset(useState(true));
-  //const [hashStamp, setHashstamp] = reset(useState<ArrayBuffer | undefined>());
+  const [enableHashstamp, setEnableHashstamp] = reset(useState(true));
+  const [hashStamp, setHashstamp] = reset(useState<ArrayBuffer | undefined>());
   const attrName = useRef<HTMLInputElement>(null);
   const attrValue = useRef<HTMLInputElement>(null);
   const [formData, setFormData] = reset(
     useReducer(formReducer, {
-      deploy: "direct",
+      deployMethod: "direct",
       difficulty: "10",
       numContracts: "1",
       maxHeight: "100",
@@ -246,20 +257,20 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
   );
   const isConnected = electrumStatus.value === ElectrumStatus.CONNECTED;
   const users = useLiveQuery(
-    async () => await db.atom.where({ type: "user", spent: 0 }).toArray(),
+    async () => await db.rst.where({ type: "user", spent: 0 }).toArray(),
     [],
     []
   );
   const containers = useLiveQuery(
-    async () => await db.atom.where({ type: "container", spent: 0 }).toArray(),
+    async () => await db.rst.where({ type: "container", spent: 0 }).toArray(),
     [],
     []
   );
 
-  /*const apiKey = useLiveQuery(
+  const apiKey = useLiveQuery(
     async () =>
       (await (db.kvp.get("nftStorageApiKey") as PromiseExtended<string>)) || ""
-  );*/
+  );
 
   const {
     isOpen: isSuccessModalOpen,
@@ -290,13 +301,13 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
   };
 
   const submit = async (dryRun: boolean) => {
-    /*if (fileState.ipfs && !apiKey) {
+    if (fileState.ipfs && !apiKey) {
       toast({
         status: "error",
         title: t`No NFT.Storage API key provided`,
       });
       return;
-    }*/
+    }
 
     if (wallet.value.locked) {
       openModal.value = {
@@ -315,7 +326,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
       immutable,
       ticker,
       supply,
-      deploy,
+      deployMethod,
       ...fields
     } = formData;
 
@@ -349,30 +360,22 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
       url,
       urlFileType
     );
-    // Default for immutable is true so only add args.i if creating a mutable token
-    const args: { [key: string]: unknown } = {};
-    if (immutable === "0") {
-      args.i = false;
-    }
-    if (tokenType === "fungible") {
-      args.ticker = ticker;
-    }
 
-    /*if (content && enableHashstamp && hashStamp) {
-      (content as AtomRemoteFile).hs = new Uint8Array(hashStamp);
-      (content as AtomRemoteFile).h = fileState.hash;
-    }*/
+    if (content && enableHashstamp && hashStamp) {
+      (content as SmartTokenRemoteFile).hs = new Uint8Array(hashStamp);
+      (content as SmartTokenRemoteFile).h = fileState.hash;
+    }
 
     const userIndex =
       authorId !== "" && authorId !== undefined
         ? parseInt(authorId, 10)
         : undefined;
-    const userAtom = userIndex !== undefined ? users[userIndex] : undefined;
-    const userInput = userAtom
-      ? await db.txo.get(userAtom.lastTxoId as number)
+    const userRst = userIndex !== undefined ? users[userIndex] : undefined;
+    const userInput = userRst
+      ? await db.txo.get(userRst.lastTxoId as number)
       : undefined;
 
-    if (userIndex && !(userAtom && userInput)) {
+    if (userIndex && !(userRst && userInput)) {
       setLoading(false);
       toast({
         title: "Error",
@@ -386,13 +389,13 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
       containerId !== "" && containerId !== undefined
         ? parseInt(containerId, 10)
         : undefined;
-    const containerAtom =
+    const containerRst =
       containerIndex !== undefined ? containers[containerIndex] : undefined;
-    const containerInput = containerAtom
-      ? await db.txo.get(containerAtom.lastTxoId as number)
+    const containerInput = containerRst
+      ? await db.txo.get(containerRst.lastTxoId as number)
       : undefined;
 
-    if (containerIndex && !(containerAtom && containerInput)) {
+    if (containerIndex && !(containerRst && containerInput)) {
       setLoading(false);
       toast({
         title: "Error",
@@ -415,16 +418,16 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
         ["desc", fields.desc],
         [
           "in",
-          containerAtom && [
+          containerRst && [
             hexToBytes(
-              Outpoint.fromString(containerAtom.ref).reverse().toString()
+              Outpoint.fromString(containerRst.ref).reverse().toString()
             ),
           ],
         ],
         [
           "by",
-          userAtom && [
-            hexToBytes(Outpoint.fromString(userAtom.ref).reverse().toString()),
+          userRst && [
+            hexToBytes(Outpoint.fromString(userRst.ref).reverse().toString()),
           ],
         ],
         ["attrs", attrs.length && Object.fromEntries(attrs)],
@@ -438,14 +441,29 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
           }
         : undefined;
 
-    const payload: AtomPayload = {
-      ...(Object.keys(args).length ? { args } : undefined),
+    const protocols = [tokenType === "fungible" ? RST_FT : RST_NFT];
+    if (deployMethod === "dmint") {
+      protocols.push(RST_DMINT);
+    }
+
+    if (immutable === "0") {
+      protocols.push(RST_MUT);
+    }
+
+    const args: { [key: string]: unknown } = {};
+    if (tokenType === "fungible") {
+      args.ticker = ticker;
+    }
+
+    const payload: SmartTokenPayload = {
+      p: protocols,
+      ...(Object.keys(args).length ? args : undefined),
       ...meta,
       ...fileObj,
     };
 
     try {
-      /*if (fileState.ipfs && fileState.file?.data) {
+      if (fileState.ipfs && fileState.file?.data) {
         // FIXME does this throw an error when unsuccessful?
         await upload(
           fileState.file?.data,
@@ -453,7 +471,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
           dryRun,
           apiKey as string
         );
-      }*/
+      }
 
       const relInputs: Utxo[] = [];
       if (userInput) relInputs.push(userInput);
@@ -462,43 +480,41 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
       const buildDeployParams = () => {
         const address = wallet.value.address;
         if (tokenType === "fungible") {
-          if (deploy === "dmint") {
+          if (deployMethod === "dmint") {
             const { difficulty, numContracts, maxHeight, reward } = fields;
             // Value 1 is for the dmint contracts
             return {
               value: 1,
-              deployMethod: "dmint" as const,
-              deployParams: {
+              method: "dmint" as const,
+              params: {
                 difficulty: parseInt(difficulty, 10),
                 numContracts: parseInt(numContracts, 10),
                 maxHeight: parseInt(maxHeight, 10),
                 reward: parseInt(reward, 10),
                 address,
-              },
+              } as RevealDmintParams,
             };
           } else {
             return {
               value: parseInt(supply, 10),
-              deployMethod: "direct" as const,
-              deployParams: { address },
+              method: "direct" as const,
+              params: { address } as RevealDirectParams,
             };
           }
         } else {
           return {
             value: 1,
-            deployMethod: "direct" as const,
-            deployParams: { address },
+            method: "direct" as const,
+            params: { address },
           };
         }
       };
 
-      const { deployMethod, deployParams, value } = buildDeployParams();
+      const deploy = buildDeployParams();
 
       const { commitTx, revealTx, fees, size } = mintToken(
         tokenType === "fungible" ? "ft" : "nft",
-        deployMethod,
-        deployParams,
-        value,
+        deploy,
         wallet.value.wif as string,
         coins,
         payload,
@@ -546,7 +562,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
     reader.onload = async () => {
       const newState: FileState = { ...noFile };
 
-      if (files[0].size > MAX_BYTES) {
+      if (files[0].size > MAX_IPFS_BYTES) {
         toast({ title: t`File is too large`, status: "error" });
         setFileState(newState);
         return;
@@ -595,10 +611,10 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
 
       newState.hash = sha256(typedArray);
 
-      /*if (size > 10000) {
+      if (size > MAX_BYTES) {
         newState.ipfs = true;
         newState.cid = await encodeCid(reader.result as ArrayBuffer);
-      }*/
+      }
 
       setFileState(newState);
     };
@@ -663,7 +679,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
       <ContentContainer>
         <PageHeader back to="/objects">
           <Trans>
-            Mint <AtomTokenType type={tokenType} />
+            Mint <TokenType type={tokenType} />
           </Trans>
         </PageHeader>
 
@@ -677,8 +693,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
             mt={-4}
             {...rootProps}
           >
-            {/*
-            {apiKey === "" && (
+            {apiKey === "" && fileState.ipfs && (
               <Alert status="info">
                 <AlertIcon />
                 <span>
@@ -697,7 +712,6 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                 </span>
               </Alert>
             )}
-            */}
             {tokenType !== "user" && (
               <FormSection>
                 <FormControl>
@@ -813,7 +827,6 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                   <AlertIcon /> {t`Your file will be stored on-chain.`}
                 </Alert>
               )}
-              {/*
               {mode === "file" && fileState.file?.data && fileState.ipfs && (
                 <Alert status="info">
                   <AlertIcon />
@@ -882,7 +895,6 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                   )}
                 </>
               )}
-              */}
               {mode === "text" && (
                 <>
                   <FormControl>
@@ -910,7 +922,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                       onChange={onFormChange}
                     />
                     <FormHelperText>
-                      {t`Type of content the URL links. Leave empty for a website link.`}
+                      {t`Type of content the URL links to. Leave empty for a website link.`}
                     </FormHelperText>
                   </FormControl>
                 </>
@@ -1031,13 +1043,13 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                 <FormSection>
                   <FormControl>
                     <FormLabel>{t`Deployment method`}</FormLabel>
-                    <Select name="deploy" onChange={onFormChange}>
+                    <Select name="deployMethod" onChange={onFormChange}>
                       <option value="direct">{t`Direct to wallet`}</option>
                       <option value="dmint">{t`Decentralized mint`}</option>
                     </Select>
                   </FormControl>
                   <Divider />
-                  {formData.deploy === "dmint" && (
+                  {formData.deployMethod === "dmint" && (
                     <>
                       <FormControl>
                         <FormLabel>{t`Difficulty`}</FormLabel>
@@ -1101,7 +1113,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                       </FormControl>
                     </>
                   )}
-                  {formData.deploy === "direct" && (
+                  {formData.deployMethod === "direct" && (
                     <FormControl>
                       <FormLabel>{t`Photon Supply`}</FormLabel>
                       <Input
@@ -1118,7 +1130,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                     </FormControl>
                   )}
                 </FormSection>
-                {formData.deploy === "dmint" && totalDmintSupply > 0 && (
+                {formData.deployMethod === "dmint" && totalDmintSupply > 0 && (
                   <Alert status="info">
                     <AlertIcon />
                     {t`Total minted supply will be ${totalDmintSupply} ${formData.ticker}`}
@@ -1143,7 +1155,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                       {photonsToRXD(stats.fee)} {network.value.ticker}
                     </Box>
                     {tokenType === "fungible" &&
-                      formData.deploy === "direct" && (
+                      formData.deployMethod === "direct" && (
                         <>
                           <Box>{t`FT supply funding`}</Box>
                           <Box>
