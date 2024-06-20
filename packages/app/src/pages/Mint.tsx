@@ -2,14 +2,14 @@ import React, { useCallback, useReducer, useRef, useState } from "react";
 import mime from "mime";
 import { t, Trans } from "@lingui/macro";
 import { Link } from "react-router-dom";
-import { RST_DMINT, RST_FT, RST_MUT, RST_NFT } from "@lib/protocols";
+import { GLYPH_DMINT, GLYPH_FT, GLYPH_MUT, GLYPH_NFT } from "@lib/protocols";
 import {
   Alert,
   AlertIcon,
   Box,
   Button,
-  Divider as CUIDivider,
   Container,
+  Divider as CUIDivider,
   Flex,
   FormControl,
   FormHelperText,
@@ -252,17 +252,18 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
       numContracts: "1",
       maxHeight: "100",
       reward: "10",
+      premine: "0",
       immutable: ["user", "container"].includes(tokenType) ? "0" : "1",
     })
   );
   const isConnected = electrumStatus.value === ElectrumStatus.CONNECTED;
   const users = useLiveQuery(
-    async () => await db.rst.where({ type: "user", spent: 0 }).toArray(),
+    async () => await db.glyph.where({ type: "user", spent: 0 }).toArray(),
     [],
     []
   );
   const containers = useLiveQuery(
-    async () => await db.rst.where({ type: "container", spent: 0 }).toArray(),
+    async () => await db.glyph.where({ type: "container", spent: 0 }).toArray(),
     [],
     []
   );
@@ -370,12 +371,12 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
       authorId !== "" && authorId !== undefined
         ? parseInt(authorId, 10)
         : undefined;
-    const userRst = userIndex !== undefined ? users[userIndex] : undefined;
-    const userInput = userRst
-      ? await db.txo.get(userRst.lastTxoId as number)
+    const userGlyph = userIndex !== undefined ? users[userIndex] : undefined;
+    const userInput = userGlyph
+      ? await db.txo.get(userGlyph.lastTxoId as number)
       : undefined;
 
-    if (userIndex && !(userRst && userInput)) {
+    if (userIndex && !(userGlyph && userInput)) {
       setLoading(false);
       toast({
         title: "Error",
@@ -389,13 +390,13 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
       containerId !== "" && containerId !== undefined
         ? parseInt(containerId, 10)
         : undefined;
-    const containerRst =
+    const containerGlyph =
       containerIndex !== undefined ? containers[containerIndex] : undefined;
-    const containerInput = containerRst
-      ? await db.txo.get(containerRst.lastTxoId as number)
+    const containerInput = containerGlyph
+      ? await db.txo.get(containerGlyph.lastTxoId as number)
       : undefined;
 
-    if (containerIndex && !(containerRst && containerInput)) {
+    if (containerIndex && !(containerGlyph && containerInput)) {
       setLoading(false);
       toast({
         title: "Error",
@@ -418,16 +419,16 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
         ["desc", fields.desc],
         [
           "in",
-          containerRst && [
+          containerGlyph && [
             hexToBytes(
-              Outpoint.fromString(containerRst.ref).reverse().toString()
+              Outpoint.fromString(containerGlyph.ref).reverse().toString()
             ),
           ],
         ],
         [
           "by",
-          userRst && [
-            hexToBytes(Outpoint.fromString(userRst.ref).reverse().toString()),
+          userGlyph && [
+            hexToBytes(Outpoint.fromString(userGlyph.ref).reverse().toString()),
           ],
         ],
         ["attrs", attrs.length && Object.fromEntries(attrs)],
@@ -441,13 +442,13 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
           }
         : undefined;
 
-    const protocols = [tokenType === "fungible" ? RST_FT : RST_NFT];
+    const protocols = [tokenType === "fungible" ? GLYPH_FT : GLYPH_NFT];
     if (deployMethod === "dmint") {
-      protocols.push(RST_DMINT);
+      protocols.push(GLYPH_DMINT);
     }
 
     if (immutable === "0") {
-      protocols.push(RST_MUT);
+      protocols.push(GLYPH_MUT);
     }
 
     const args: { [key: string]: unknown } = {};
@@ -481,7 +482,8 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
         const address = wallet.value.address;
         if (tokenType === "fungible") {
           if (deployMethod === "dmint") {
-            const { difficulty, numContracts, maxHeight, reward } = fields;
+            const { difficulty, maxHeight, reward, premine, numContracts } =
+              fields;
             // Value 1 is for the dmint contracts
             return {
               value: 1,
@@ -491,6 +493,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                 numContracts: parseInt(numContracts, 10),
                 maxHeight: parseInt(maxHeight, 10),
                 reward: parseInt(reward, 10),
+                premine: parseInt(premine, 10),
                 address,
               } as RevealDmintParams,
             };
@@ -654,7 +657,8 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
 
   const calcTimeToMine = (diff: number) => {
     // 33 bits (4 bytes + 1 bit to make the next 64 bit number unsigned)
-    const seconds = Math.round((diff * Math.pow(2, 33)) / 3000000000);
+    // Estimate is for RTX 4090, approx 5 GH/s
+    const seconds = Math.round((diff * Math.pow(2, 33)) / 5000000000);
     if (seconds > 86400) {
       return `${Math.round(seconds / 864) / 100} days`;
     }
@@ -672,7 +676,8 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
   const totalDmintSupply =
     parseInt(formData.numContracts, 10) *
     parseInt(formData.maxHeight, 10) *
-    parseInt(formData.reward, 10);
+    parseInt(formData.reward, 10) +
+    parseInt(formData.premine, 10);
 
   return (
     <>
@@ -861,7 +866,9 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                           onChange={(value) => setEnableHashstamp(!!value)}
                         >
                           <Stack spacing={5} direction="row">
-                            <Radio value="1">{t`Store HashStamp on-chain`}</Radio>
+                            <Radio value="1">
+                              {t`Store HashStamp on-chain`}
+                            </Radio>
                             <Radio value="">{t`No HashStamp`}</Radio>
                           </Stack>
                         </RadioGroup>
@@ -1077,7 +1084,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                           type="number"
                           onChange={onFormChange}
                           min={1}
-                          max={100}
+                          max={32}
                         />
                         <FormHelperText>
                           {t`Multiple contracts allows parallel mining, reducing congestion for low difficulty contracts`}
@@ -1094,7 +1101,7 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                           min={1}
                         />
                         <FormHelperText>
-                          {t`Total number of mints per contract`}
+                          {t`Total number of mints`}
                         </FormHelperText>
                       </FormControl>
                       <FormControl>
@@ -1109,6 +1116,20 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                         />
                         <FormHelperText>
                           {t`Number of tokens created on each mint`}
+                        </FormHelperText>
+                      </FormControl>
+                      <FormControl>
+                        <FormLabel>{t`Premine`}</FormLabel>
+                        <Input
+                          placeholder=""
+                          name="premine"
+                          type="number"
+                          onChange={onFormChange}
+                          required
+                          min={0}
+                        />
+                        <FormHelperText>
+                          {t`Token supply sent directly to your wallet. Requires an equal amount of RXD photons.`}
                         </FormHelperText>
                       </FormControl>
                     </>
@@ -1160,6 +1181,17 @@ export default function Mint({ tokenType }: { tokenType: TokenType }) {
                           <Box>{t`FT supply funding`}</Box>
                           <Box>
                             {photonsToRXD(parseInt(formData.supply, 10))}{" "}
+                            {network.value.ticker}
+                          </Box>
+                        </>
+                      )}
+                    {tokenType === "fungible" &&
+                      formData.deployMethod === "dmint" &&
+                      parseInt(formData.premine, 10) > 0 && (
+                        <>
+                          <Box>{t`Premine supply funding`}</Box>
+                          <Box>
+                            {photonsToRXD(parseInt(formData.premine, 10))}{" "}
                             {network.value.ticker}
                           </Box>
                         </>
